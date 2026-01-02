@@ -5,3 +5,4 @@ pytesseract>=0.3.10
 paho-mqtt>=1.6.1
 requests>=2.31.0
 python-dotenv>=1.0.0
+lap>=0.5.12

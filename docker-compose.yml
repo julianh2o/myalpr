@@ -1,7 +1,10 @@
 services:
   myalpr:
-    image: julianh2o/myalpr:latest
-    build: .
+    image: julianh2o/myalpr:1.0.1
+    build:
+      context: .
+      platforms:
+        - linux/amd64
     container_name: myalpr
     restart: unless-stopped
 
