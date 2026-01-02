@@ -9,6 +9,7 @@ from ultralytics import YOLO
 from analyze import analyze_tracked_object, get_crossing_frame
 from ollama import read_plate
 from mqtt_integration import get_mqtt_publisher
+from ffmpeg_capture import FFmpegCapture
 
 load_dotenv()
 
@@ -22,10 +23,17 @@ mqtt = get_mqtt_publisher()  # MQTT version
 frame_width = None
 frame_height = None
 
+print(cv2.getBuildInformation())
+
 def on_car_lost(obj):
     global frame_width, frame_height
 
     duration = obj.duration()
+
+    # Ignore objects tracked for less than 5 seconds
+    if duration < 5.0:
+        return
+
     frame_count = len(obj.boxes)
 
     # Get HD frames for this object
@@ -108,20 +116,34 @@ tracker = ObjectTracker(
 stream_high = os.getenv("CAM_DRIVEWAY_HIGH")
 stream_low = os.getenv("CAM_DRIVEWAY_LOW")
 
-# Set environment variable to skip TLS verification for RTSP streams
-os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp|tls_verify;0'
+def open_stream(url, name):
+    """Open a video stream with error handling using FFmpeg subprocess"""
+    print(f"Opening {name} stream with FFmpeg...")
+    cap = FFmpegCapture(url)
+    time.sleep(2)  # Give FFmpeg time to start
+    if not cap.isOpened():
+        print(f"Error: Could not open {name} stream")
+        exit(1)
+    print(f"{name} stream opened successfully")
+    return cap
 
-# Open both low and high quality streams with options
-caplow = cv2.VideoCapture(stream_low, cv2.CAP_FFMPEG)
-caphigh = cv2.VideoCapture(stream_high, cv2.CAP_FFMPEG)
+def reconnect_stream(cap, url, name):
+    """Reconnect to a stream that has failed"""
+    print(f"Reconnecting to {name} stream...")
+    cap.release()
+    time.sleep(1)  # Brief pause before reconnecting
+    cap = FFmpegCapture(url)
+    time.sleep(2)  # Give FFmpeg time to start
+    if cap.isOpened():
+        print(f"{name} stream reconnected successfully")
+    else:
+        print(f"Failed to reconnect to {name} stream")
+    return cap
 
-if not caplow.isOpened():
-    print("Error: Could not open low quality stream")
-    exit(1)
-
-if not caphigh.isOpened():
-    print("Error: Could not open high quality stream")
-    exit(1)
+# Open both low and high quality streams using FFmpeg subprocess
+# This bypasses OpenCV's TLS issues by using ffmpeg directly
+caplow = open_stream(stream_low, "Low quality")
+caphigh = open_stream(stream_high, "High quality")
 
 print("Both streams opened successfully!")
 
@@ -132,7 +154,9 @@ else:
     print("Starting stream... Press 'q' to quit")
 
 consecutive_errors = 0
-max_errors = 30  # Allow 30 consecutive errors before giving up
+max_errors_before_reconnect = 10  # Try reconnecting after this many errors
+max_reconnect_attempts = 3  # Maximum reconnection attempts before giving up
+reconnect_count = 0
 
 while True:
     # Grab from both streams
@@ -142,25 +166,49 @@ while True:
     except Exception as e:
         print(f"Error grabbing frames: {e}")
         consecutive_errors += 1
-        if consecutive_errors >= max_errors:
-            print("Too many consecutive errors, exiting")
-            break
+
+        # Attempt reconnection after several consecutive errors
+        if consecutive_errors >= max_errors_before_reconnect:
+            if reconnect_count < max_reconnect_attempts:
+                caplow = reconnect_stream(caplow, stream_low, "Low quality")
+                caphigh = reconnect_stream(caphigh, stream_high, "High quality")
+                consecutive_errors = 0
+                reconnect_count += 1
+                time.sleep(2)  # Wait before retrying
+                continue
+            else:
+                print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
+                break
+
         time.sleep(0.1)
         continue
 
     # Retrieve from low quality stream first
     success_low, frame_low = caplow.retrieve()
+    success_high, frame_high = caphigh.retrieve()
 
     if not success_low or frame_low is None:
         consecutive_errors += 1
-        if consecutive_errors >= max_errors:
-            print("Too many consecutive frame failures, exiting")
-            break
+
+        # Attempt reconnection after several consecutive errors
+        if consecutive_errors >= max_errors_before_reconnect:
+            if reconnect_count < max_reconnect_attempts:
+                caplow = reconnect_stream(caplow, stream_low, "Low quality")
+                caphigh = reconnect_stream(caphigh, stream_high, "High quality")
+                consecutive_errors = 0
+                reconnect_count += 1
+                time.sleep(2)  # Wait before retrying
+                continue
+            else:
+                print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
+                break
+
         time.sleep(0.1)
         continue
 
-    # Reset error counter on success
+    # Reset error counters on success
     consecutive_errors = 0
+    reconnect_count = 0
 
     # Set frame dimensions on first frame
     if frame_width is None:
@@ -173,7 +221,7 @@ while True:
 
     # If there are tracked objects, retrieve and store HD frame
     if len(tracked_objects) > 0 and grabbed_high:
-        success_high, frame_high = caphigh.retrieve()
+        # success_high, frame_high = caphigh.retrieve()
         if not success_high: raise
         tracker.assignFrame(frame_high)
 
