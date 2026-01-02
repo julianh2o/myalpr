@@ -12,6 +12,9 @@ from mqtt_integration import get_mqtt_publisher
 
 load_dotenv()
 
+# Configuration
+HEADLESS = True  # Set to False to show GUI window
+
 # Initialize publisher (choose one)
 mqtt = get_mqtt_publisher()  # MQTT version
 
@@ -123,7 +126,10 @@ if not caphigh.isOpened():
 print("Both streams opened successfully!")
 
 fps = FpsMonitor()
-print("Starting stream... Press 'q' to quit")
+if HEADLESS:
+    print("Starting stream in headless mode... Press Ctrl+C to quit")
+else:
+    print("Starting stream... Press 'q' to quit")
 
 consecutive_errors = 0
 max_errors = 30  # Allow 30 consecutive errors before giving up
@@ -171,32 +177,39 @@ while True:
         if not success_high: raise
         tracker.assignFrame(frame_high)
 
-    annotated_frame = results[0].plot()
-
-    # Draw 75% vertical line
-    vertical_line_x = int(frame_width * 0.75)
-    cv2.line(annotated_frame, (vertical_line_x, 0), (vertical_line_x, frame_height),
-             (0, 255, 255), 2)
-
-    # FPS Display
+    # Update FPS counter
     fps.tick()
-    cv2.putText(annotated_frame, f"FPS: {fps.get_fps():.2f}", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-    # Display tracking count
-    cv2.putText(annotated_frame, f"Tracking: {len(tracked_objects)} cars", (10, 70),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    if not HEADLESS:
+        annotated_frame = results[0].plot()
 
-    # Display the frame
-    cv2.imshow("Driveway Camera Stream", annotated_frame)
+        # Draw 75% vertical line
+        vertical_line_x = int(frame_width * 0.75)
+        cv2.line(annotated_frame, (vertical_line_x, 0), (vertical_line_x, frame_height),
+                 (0, 255, 255), 2)
 
-    # Break loop if 'q' is pressed
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+        # FPS Display
+        cv2.putText(annotated_frame, f"FPS: {fps.get_fps():.2f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+        # Display tracking count
+        cv2.putText(annotated_frame, f"Tracking: {len(tracked_objects)} cars", (10, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+        # Display the frame
+        cv2.imshow("Driveway Camera Stream", annotated_frame)
+
+        # Break loop if 'q' is pressed
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+    else:
+        # Small delay to prevent CPU spinning in headless mode
+        time.sleep(0.01)
 
 # Release resources
 caplow.release()
 caphigh.release()
-cv2.destroyAllWindows()
+if not HEADLESS:
+    cv2.destroyAllWindows()
 mqtt.disconnect()
 print("Stream ended")
