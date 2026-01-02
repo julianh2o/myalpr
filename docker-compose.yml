@@ -1,9 +1,8 @@
-version: '3.8'
-
 services:
   myalpr:
+    image: julianh2o/myalpr:latest
     build: .
-    container_name: driveway-alpr
+    container_name: myalpr
     restart: unless-stopped
 
     network_mode: host
