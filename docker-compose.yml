@@ -1,6 +1,6 @@
 services:
   myalpr:
-    image: julianh2o/myalpr:1.0.4
+    image: julianh2o/myalpr:1.0.5
     build:
       context: .
       platforms:
