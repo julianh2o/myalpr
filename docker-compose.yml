@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  myalpr:
+    build: .
+    container_name: driveway-alpr
+    restart: unless-stopped
+
+    network_mode: host
+
+    environment:
+      # Camera Streams (RTSP/RTSPS URLs)
+      - CAM_DRIVEWAY_HIGH=${CAM_DRIVEWAY_HIGH}
+      - CAM_DRIVEWAY_LOW=${CAM_DRIVEWAY_LOW}
+
+      # Ollama Vision Model
+      - OLLAMA_URL=${OLLAMA_URL}
+      - OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-llama3.2-vision}
+
+      - MQTT_BROKER=${MQTT_BROKER:-homeassistant.local}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_USER=${MQTT_USER:-}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-}
