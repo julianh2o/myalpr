@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 import threading
 import queue
+import time
 
 
 class FFmpegCapture:
