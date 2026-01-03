@@ -29,7 +29,7 @@ def on_car_lost(obj):
     global frame_width, frame_height
 
     duration = obj.duration()
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     if duration < 2.0:
         print(f"[{now}] Object #{obj.track_id} ignored (duration {duration:.2f}s < 2s)")
