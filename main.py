@@ -29,9 +29,10 @@ def on_car_lost(obj):
     global frame_width, frame_height
 
     duration = obj.duration()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Ignore objects tracked for less than 5 seconds
-    if duration < 5.0:
+    if duration < 2.0:
+        print(f"[{now}] Object #{obj.track_id} ignored (duration {duration:.2f}s < 2s)")
         return
 
     frame_count = len(obj.boxes)
@@ -42,7 +43,7 @@ def on_car_lost(obj):
 
     analysis = analyze_tracked_object(obj, frame_width, frame_height)
 
-    print(f"Car #{obj.track_id}: {analysis['action']} - "
+    print(f"[{now}] Car #{obj.track_id}: {analysis['action']} - "
             f"tracked for {duration:.1f}s ({frame_count} frames, {hd_frame_count} HD)")
 
     if analysis['crossed_at']:
@@ -78,7 +79,7 @@ def on_car_lost(obj):
                 y2 = min(hd_height, y2)
 
                 cropped_car = hd_frame[y1:y2, x1:x2]
-                cv2.imwrite("./cropped.jpg", cropped_car)
+                cv2.imwrite(f"./frames/cropped_{obj.track_id}.jpg", cropped_car)
 
                 # Read the license plate
                 print(f"  Reading license plate from HD frame {crossing_frame_id}...")
