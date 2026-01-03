@@ -1,6 +1,7 @@
 import cv2
 import time
 import os
+import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
 from fps_monitor import FpsMonitor
@@ -215,6 +216,18 @@ while True:
     if frame_width is None:
         frame_height, frame_width = frame_low.shape[:2]
         print(f"Frame dimensions: {frame_width}x{frame_height}")
+
+    # Make a writable copy of the frame for masking
+    frame_low = frame_low.copy()
+
+    # Apply triangular mask to top right corner (to ignore timestamp/overlay)
+    # Triangle extends 30% left from right edge and 10% down from top
+    mask_points = np.array([
+        [frame_width, 0],                           # Top right corner
+        [int(frame_width * 0.1), 0],                # 30% left along top edge
+        [frame_width, int(frame_height * 0.40)]      # 10% down along right edge
+    ], dtype=np.int32)
+    cv2.fillPoly(frame_low, [mask_points], (0, 0, 0))
 
     # Run YOLO tracking on low quality stream
     results = model.track(frame_low, persist=True, verbose=False)

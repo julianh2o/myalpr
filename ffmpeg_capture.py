@@ -26,14 +26,19 @@ class FFmpegCapture:
 
     def _start(self):
         """Start ffmpeg subprocess and reading thread"""
-        # Build ffmpeg command
+        # Build ffmpeg command with robust RTSP settings
         cmd = [
             'ffmpeg',
             '-rtsp_transport', 'tcp',
+            '-rtsp_flags', 'prefer_tcp',
+            '-timeout', '5000000',  # 5 second timeout in microseconds
+            '-stimeout', '5000000',  # Socket timeout
             '-i', self.url,
             '-f', 'rawvideo',
             '-pix_fmt', 'bgr24',
             '-an',  # Disable audio
+            '-fflags', 'nobuffer',  # Minimize buffering
+            '-flags', 'low_delay',  # Low delay mode
         ]
 
         # Add size specification if provided
@@ -46,9 +51,16 @@ class FFmpegCapture:
         self.process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,  # Capture stderr for debugging
             bufsize=10**8
         )
+
+        # Start stderr logging thread
+        stderr_thread = threading.Thread(target=self._log_stderr, daemon=True)
+        stderr_thread.start()
+
+        # Give FFmpeg time to establish connection
+        time.sleep(1)
 
         # Probe frame size if not provided
         if not self.width or not self.height:
@@ -77,18 +89,38 @@ class FFmpegCapture:
         self.thread = threading.Thread(target=self._read_frames, daemon=True)
         self.thread.start()
 
+    def _log_stderr(self):
+        """Log FFmpeg stderr output for debugging"""
+        if not self.process or not self.process.stderr:
+            return
+
+        try:
+            for line in iter(self.process.stderr.readline, b''):
+                if not self.running:
+                    break
+                line_str = line.decode('utf-8', errors='ignore').strip()
+                if line_str and not line_str.startswith('frame='):  # Filter out frame progress
+                    print(f"FFmpeg: {line_str}")
+        except:
+            pass
+
     def _restart_stream(self):
         """Restart the ffmpeg process (called from background thread)"""
         print("Restarting FFmpeg stream...")
 
-        # Build ffmpeg command
+        # Build ffmpeg command with robust RTSP settings
         cmd = [
             'ffmpeg',
             '-rtsp_transport', 'tcp',
+            '-rtsp_flags', 'prefer_tcp',
+            '-timeout', '5000000',  # 5 second timeout in microseconds
+            '-stimeout', '5000000',  # Socket timeout
             '-i', self.url,
             '-f', 'rawvideo',
             '-pix_fmt', 'bgr24',
             '-an',
+            '-fflags', 'nobuffer',  # Minimize buffering
+            '-flags', 'low_delay',  # Low delay mode
         ]
 
         if self.width and self.height:
@@ -100,9 +132,16 @@ class FFmpegCapture:
         self.process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,  # Capture stderr for debugging
             bufsize=10**8
         )
+
+        # Start stderr logging thread for new process
+        stderr_thread = threading.Thread(target=self._log_stderr, daemon=True)
+        stderr_thread.start()
+
+        # Give FFmpeg time to establish connection
+        time.sleep(1)
 
         print("FFmpeg stream restarted")
 
