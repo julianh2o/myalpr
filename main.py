@@ -65,16 +65,18 @@ def on_car_lost(obj):
             # Get the frame ID at the crossing point
             crossing_frame_id = obj.frame_ids[crossing_frame_idx]
 
-            # Get the HD frame at the crossing point
+            # Get the HD frame at the crossing point (no sync issues - same source!)
             if crossing_frame_id in tracker.hd_frames:
                 hd_frame = tracker.hd_frames[crossing_frame_id]
                 box = obj.boxes[crossing_frame_idx]
 
                 hd_height, hd_width = hd_frame.shape[:2]
-                scale_x, scale_y = hd_width / frame_width, hd_height / frame_height
 
-                # Extract bounding box coordinates (xywh format) from low quality tracking
-                # box is in pixel coordinates of the low-res frame
+                # Calculate scale factors from low-res tracking to HD
+                scale_x = hd_width / TARGET_WIDTH
+                scale_y = hd_height / TARGET_HEIGHT
+
+                # Extract bounding box coordinates (xywh format) from low-res tracking
                 x_center, y_center, w, h = float(box[0]), float(box[1]), float(box[2]), float(box[3])
 
                 # Scale to HD frame coordinates
@@ -97,7 +99,7 @@ def on_car_lost(obj):
 
                 # Debug: Print coordinates
                 print(f"  Debug - Low-res box (xywh): center=({x_center:.1f},{y_center:.1f}) size=({w:.1f},{h:.1f})")
-                print(f"  Debug - HD frame size: {hd_width}x{hd_height}, Low-res: {frame_width}x{frame_height}")
+                print(f"  Debug - HD frame size: {hd_width}x{hd_height}, Tracking: {TARGET_WIDTH}x{TARGET_HEIGHT}")
                 print(f"  Debug - Scale factors: x={scale_x:.2f}, y={scale_y:.2f}")
                 print(f"  Debug - HD box corners: ({x1},{y1}) to ({x2},{y2})")
                 print(f"  Debug - Crop size: {x2-x1}x{y2-y1}")
@@ -145,8 +147,11 @@ tracker = ObjectTracker(
     on_object_lost=on_car_lost
 )
 
-stream_high = os.getenv("CAM_DRIVEWAY_HIGH")
-stream_low = os.getenv("CAM_DRIVEWAY_LOW")
+stream_url = os.getenv("CAM_DRIVEWAY_HIGH")
+
+# Target dimensions for downsampled frames (for YOLO tracking)
+TARGET_WIDTH = 640
+TARGET_HEIGHT = 360
 
 def open_stream(url, name):
     """Open a video stream with error handling using FFmpeg subprocess"""
@@ -181,12 +186,10 @@ def reconnect_stream(cap, url, name):
         print(f"Failed to reconnect to {name} stream")
     return cap
 
-# Open both low and high quality streams using FFmpeg subprocess
-# This bypasses OpenCV's TLS issues by using ffmpeg directly
-caplow = open_stream(stream_low, "Low quality")
-caphigh = open_stream(stream_high, "High quality")
+# Open HD stream - we'll downsample in memory for YOLO tracking
+cap = open_stream(stream_url, "HD camera")
 
-print("Both streams opened successfully!")
+print("Stream opened successfully!")
 
 fps = FpsMonitor()
 if HEADLESS:
@@ -200,50 +203,52 @@ max_reconnect_attempts = 3  # Maximum reconnection attempts before giving up
 reconnect_count = 0
 
 while True:
-    # Grab from both streams
+    # Grab and retrieve frame from HD stream
     try:
-        grabbed_low = caplow.grab()
-        grabbed_high = caphigh.grab()
+        if not cap.grab():
+            consecutive_errors += 1
+            if consecutive_errors >= max_errors_before_reconnect:
+                if reconnect_count < max_reconnect_attempts:
+                    cap = reconnect_stream(cap, stream_url, "HD camera")
+                    consecutive_errors = 0
+                    reconnect_count += 1
+                    time.sleep(2)
+                    continue
+                else:
+                    print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
+                    break
+            time.sleep(0.1)
+            continue
+
+        success, frame_hd = cap.retrieve()
+        if not success or frame_hd is None:
+            consecutive_errors += 1
+            if consecutive_errors >= max_errors_before_reconnect:
+                if reconnect_count < max_reconnect_attempts:
+                    cap = reconnect_stream(cap, stream_url, "HD camera")
+                    consecutive_errors = 0
+                    reconnect_count += 1
+                    time.sleep(2)
+                    continue
+                else:
+                    print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
+                    break
+            time.sleep(0.1)
+            continue
+
     except Exception as e:
-        print(f"Error grabbing frames: {e}")
+        print(f"Error grabbing frame: {e}")
         consecutive_errors += 1
-
-        # Attempt reconnection after several consecutive errors
         if consecutive_errors >= max_errors_before_reconnect:
             if reconnect_count < max_reconnect_attempts:
-                caplow = reconnect_stream(caplow, stream_low, "Low quality")
-                caphigh = reconnect_stream(caphigh, stream_high, "High quality")
+                cap = reconnect_stream(cap, stream_url, "HD camera")
                 consecutive_errors = 0
                 reconnect_count += 1
-                time.sleep(2)  # Wait before retrying
+                time.sleep(2)
                 continue
             else:
                 print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
                 break
-
-        time.sleep(0.1)
-        continue
-
-    # Retrieve from low quality stream first
-    success_low, frame_low = caplow.retrieve()
-    success_high, frame_high = caphigh.retrieve()
-
-    if not success_low or frame_low is None:
-        consecutive_errors += 1
-
-        # Attempt reconnection after several consecutive errors
-        if consecutive_errors >= max_errors_before_reconnect:
-            if reconnect_count < max_reconnect_attempts:
-                caplow = reconnect_stream(caplow, stream_low, "Low quality")
-                caphigh = reconnect_stream(caphigh, stream_high, "High quality")
-                consecutive_errors = 0
-                reconnect_count += 1
-                time.sleep(2)  # Wait before retrying
-                continue
-            else:
-                print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
-                break
-
         time.sleep(0.1)
         continue
 
@@ -251,32 +256,33 @@ while True:
     consecutive_errors = 0
     reconnect_count = 0
 
-    # Set frame dimensions on first frame
+    # Set frame dimensions on first frame (based on target low-res size)
     if frame_width is None:
-        frame_height, frame_width = frame_low.shape[:2]
-        print(f"Frame dimensions: {frame_width}x{frame_height}")
+        frame_width = TARGET_WIDTH
+        frame_height = TARGET_HEIGHT
+        hd_height, hd_width = frame_hd.shape[:2]
+        print(f"HD frame dimensions: {hd_width}x{hd_height}")
+        print(f"Tracking frame dimensions: {frame_width}x{frame_height}")
 
-    # Make a writable copy of the frame for masking
-    frame_low = frame_low.copy()
+    # Downsample HD frame to low-res for YOLO tracking
+    frame_low = cv2.resize(frame_hd, (TARGET_WIDTH, TARGET_HEIGHT))
 
     # Apply triangular mask to top right corner (to ignore timestamp/overlay)
-    # Triangle extends 30% left from right edge and 10% down from top
+    # Triangle extends 10% left from right edge and 40% down from top
     mask_points = np.array([
         [frame_width, 0],                           # Top right corner
-        [int(frame_width * 0.1), 0],                # 30% left along top edge
-        [frame_width, int(frame_height * 0.40)]      # 10% down along right edge
+        [int(frame_width * 0.1), 0],                # 10% left along top edge
+        [frame_width, int(frame_height * 0.40)]     # 40% down along right edge
     ], dtype=np.int32)
     cv2.fillPoly(frame_low, [mask_points], (0, 0, 0))
 
-    # Run YOLO tracking on low quality stream
+    # Run YOLO tracking on downsampled frame
     results = model.track(frame_low, persist=True, verbose=False)
     tracked_objects = tracker.update(results[0])
 
-    # If there are tracked objects, retrieve and store HD frame
-    if len(tracked_objects) > 0 and grabbed_high:
-        # success_high, frame_high = caphigh.retrieve()
-        if not success_high: raise
-        tracker.assignFrame(frame_high)
+    # If there are tracked objects, store the HD frame
+    if len(tracked_objects) > 0:
+        tracker.assignFrame(frame_hd)
 
     # Update FPS counter
     fps.tick()
@@ -308,8 +314,7 @@ while True:
         time.sleep(0.01)
 
 # Release resources
-caplow.release()
-caphigh.release()
+cap.release()
 if not HEADLESS:
     cv2.destroyAllWindows()
 mqtt.disconnect()
