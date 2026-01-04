@@ -145,11 +145,16 @@ class FFmpegCapture:
         """Background thread to read frames from ffmpeg"""
         retry_count = 0
         current_retry_delay = self.retry_delay
+        disconnect_start_time = None
 
         while self.running:
             try:
                 raw_frame = self.process.stdout.read(self.frame_size)
                 if len(raw_frame) != self.frame_size:
+                    # Mark disconnection start time
+                    if disconnect_start_time is None:
+                        disconnect_start_time = time.time()
+
                     print(f"FFmpeg stream ended or error occurred")
 
                     # Check if we should retry
@@ -178,7 +183,12 @@ class FFmpegCapture:
                     else:
                         break
 
-                # Successfully read frame - reset retry counter
+                # Successfully read frame - reset retry counter and report reconnection
+                if retry_count > 0 and disconnect_start_time is not None:
+                    downtime = time.time() - disconnect_start_time
+                    print(f"Stream reconnected after {downtime:.1f}s downtime", flush=True)
+                    disconnect_start_time = None
+
                 retry_count = 0
                 current_retry_delay = self.retry_delay
 
@@ -196,6 +206,10 @@ class FFmpegCapture:
                 self.frame_queue.put(frame)
 
             except Exception as e:
+                # Mark disconnection start time
+                if disconnect_start_time is None:
+                    disconnect_start_time = time.time()
+
                 print(f"Error reading frame: {e}")
 
                 # Clean up and retry
@@ -246,7 +260,14 @@ class FFmpegCapture:
         if self.thread:
             self.thread.join(timeout=2.0)
         if self.process:
-            self.process.terminate()
-            self.process.wait(timeout=2.0)
-            if self.process.poll() is None:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                # Process didn't terminate gracefully, force kill
                 self.process.kill()
+                try:
+                    self.process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    # Process is really stuck, but we've done all we can
+                    pass

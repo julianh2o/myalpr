@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     gstreamer1.0-plugins-ugly \
     gstreamer1.0-libav \
     ffmpeg \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file
@@ -31,7 +32,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py .
 
 # Create necessary directories
-RUN mkdir -p captured_cars test_footage
+RUN mkdir -p captured_cars test_footage data frames
+
+# Download YOLO model during build
+RUN wget -q https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt -O data/yolo11n.pt \
+    && echo "YOLO model downloaded successfully"
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

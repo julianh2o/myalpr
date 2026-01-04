@@ -6,6 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from fps_monitor import FpsMonitor
 from object_tracker import ObjectTracker
+from frame_buffer import FrameBuffer
 from ultralytics import YOLO
 from analyze import analyze_tracked_object, get_crossing_frame
 from ollama import read_plate
@@ -15,7 +16,7 @@ from ffmpeg_capture import FFmpegCapture
 load_dotenv()
 
 # Configuration
-HEADLESS = True  # Set to False to show GUI window
+HEADLESS = os.getenv("HEADLESS", "True").lower() in ("true", "1", "yes")
 
 # Initialize publisher (choose one)
 mqtt = get_mqtt_publisher()  # MQTT version
@@ -30,6 +31,9 @@ KNOWN_PLATES = [p.strip().upper() for p in KNOWN_PLATES_STR.split(",") if p.stri
 if KNOWN_PLATES:
     print(f"Known plates loaded: {', '.join(KNOWN_PLATES)}")
 
+# Rolling frame buffer for video context
+frame_buffer = FrameBuffer(buffer_seconds=3, estimated_fps=10)
+
 print(cv2.getBuildInformation())
 
 def on_car_lost(obj):
@@ -37,6 +41,7 @@ def on_car_lost(obj):
 
     duration = obj.duration()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = int(time.time())
 
     if duration < 1.0:
         print(f"[{now}] Object #{obj.track_id} ignored (duration {duration:.2f}s < 1s)")
@@ -48,21 +53,35 @@ def on_car_lost(obj):
     hd_frames = tracker.get_frames_for_object(obj)
     hd_frame_count = len(hd_frames)
 
-    # Debug: Create video from all HD frames
+    # Debug: Create video with buffer context (frames before and after)
     if hd_frame_count > 0:
-        video_path = f"./frames/video_{obj.track_id}.mp4"
-        first_frame = hd_frames[0]
-        h, w = first_frame.shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        video_writer = cv2.VideoWriter(video_path, fourcc, 10.0, (w, h))
+        first_frame_id = obj.frame_ids[0] if obj.frame_ids else 0
+        last_frame_id = obj.frame_ids[-1] if obj.frame_ids else 0
 
-        for frame in hd_frames:
-            video_writer.write(frame)
+        # Get context frames from buffer
+        buffer_frames_before, buffer_frames_after = frame_buffer.get_frames_around(
+            first_frame_id, last_frame_id
+        )
 
-        video_writer.release()
-        print(f"  Debug - Saved video with {hd_frame_count} frames to {video_path}")
+        # Combine: buffer before + tracked frames + buffer after
+        all_frames = buffer_frames_before + hd_frames + buffer_frames_after
+        total_frame_count = len(all_frames)
+
+        if total_frame_count > 0:
+            video_path = f"./frames/video_{timestamp}_{obj.track_id}.mp4"
+            first_frame = all_frames[0]
+            h, w = first_frame.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            video_writer = cv2.VideoWriter(video_path, fourcc, 10.0, (w, h))
+
+            for frame in all_frames:
+                video_writer.write(frame)
+
+            video_writer.release()
+            print(f"  Debug - Saved video: {len(buffer_frames_before)} before + {hd_frame_count} tracked + {len(buffer_frames_after)} after = {total_frame_count} total frames → {video_path}")
 
     analysis = analyze_tracked_object(obj, frame_width, frame_height)
+    print(analysis);
 
     print(f"[{now}] Car #{obj.track_id}: {analysis['action']} - "
             f"tracked for {duration:.1f}s ({frame_count} frames, {hd_frame_count} HD)")
@@ -135,10 +154,10 @@ def on_car_lost(obj):
                 cv2.putText(debug_frame, f"Crop: {x2-x1}x{y2-y1}px", (x1, y2+40),
                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
 
-                cv2.imwrite(f"./frames/debug_full_{obj.track_id}.jpg", debug_frame)
+                cv2.imwrite(f"./frames/debug_full_{timestamp}_{obj.track_id}.jpg", debug_frame)
 
                 cropped_car = hd_frame[y1:y2, x1:x2]
-                cv2.imwrite(f"./frames/cropped_{obj.track_id}.jpg", cropped_car)
+                cv2.imwrite(f"./frames/cropped_{timestamp}_{obj.track_id}.jpg", cropped_car)
 
                 # Read the license plate
                 print(f"  Reading license plate from HD frame {crossing_frame_id}...")
@@ -165,10 +184,17 @@ def on_car_lost(obj):
             f"dy={analysis['direction']['delta_y']:.1f}")
     print(f"  Frame IDs: {obj.frame_ids[:5]}... (showing first 5)")
 
-model = YOLO("yolo11n.pt")
+# Ensure data directory exists
+os.makedirs("data", exist_ok=True)
 
+# Load YOLO model from data directory (will auto-download if missing)
+model_path = os.path.join("data", "yolo11n.pt")
+print(f"Loading YOLO model from {model_path}")
+model = YOLO(model_path)
+
+# COCO class IDs: 2 = car, 7 = truck
 tracker = ObjectTracker(
-    class_id=2, #Cars only
+    class_ids=[2, 7],  # Track both cars and trucks
     frames_before_purge=20,
     on_object_lost=on_car_lost
 )
@@ -281,6 +307,9 @@ while True:
     # Reset error counters on success
     consecutive_errors = 0
     reconnect_count = 0
+
+    # Add frame to rolling buffer for video context
+    global_frame_id = frame_buffer.add_frame(frame_hd)
 
     # Set frame dimensions on first frame (based on target low-res size)
     if frame_width is None:

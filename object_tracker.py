@@ -7,20 +7,36 @@ class TrackedObject:
 
     def __init__(self, track_id, class_id, box):
         self.track_id = track_id
-        self.class_id = class_id
         self.first_seen = time.time()
         self.last_seen = time.time()
         self.frames_since_seen = 0
         self.boxes = [box]  # History of bounding boxes
+        self.class_ids = [class_id]  # History of class IDs at each frame
         self.frame_ids = []  # Frame IDs where this object appeared
         self.data = {}  # Custom data storage
 
-    def update(self, box, frame_id):
+    def update(self, box, class_id, frame_id):
         """Update object with new detection."""
         self.last_seen = time.time()
         self.frames_since_seen = 0
         self.boxes.append(box)
+        self.class_ids.append(class_id)
         self.frame_ids.append(frame_id)
+
+    def get_majority_class(self):
+        """Get the most common class_id across all detections."""
+        from collections import Counter
+        if not self.class_ids:
+            return None
+        counter = Counter(self.class_ids)
+        return counter.most_common(1)[0][0]
+
+    def get_class_percentage(self, target_class_id):
+        """Get percentage of frames where object was classified as target class."""
+        if not self.class_ids:
+            return 0.0
+        count = sum(1 for cid in self.class_ids if cid == target_class_id)
+        return (count / len(self.class_ids)) * 100.0
 
     def mark_not_seen(self):
         """Increment frames since last seen."""
@@ -34,18 +50,21 @@ class TrackedObject:
 class ObjectTracker:
     """Tracks objects across frames with automatic cleanup."""
 
-    def __init__(self, class_id, frames_before_purge=20, on_object_lost=None):
+    def __init__(self, class_ids, frames_before_purge=20, on_object_lost=None, min_class_percentage=50.0):
         """
         Initialize the object tracker.
 
         Args:
-            class_id: YOLO class ID to track (e.g., 2 for cars in COCO)
+            class_ids: YOLO class ID(s) to filter for - single int or list of ints (e.g., [2, 7] for cars and trucks in COCO)
             frames_before_purge: Number of frames before removing unseen objects (default: 20)
             on_object_lost: Callback function called when object is purged, receives TrackedObject
+            min_class_percentage: Minimum percentage of frames object must be classified as target class (default: 50.0)
         """
-        self.class_id = class_id
+        # Normalize to list
+        self.target_class_ids = [class_ids] if isinstance(class_ids, int) else class_ids
         self.frames_before_purge = frames_before_purge
         self.on_object_lost = on_object_lost
+        self.min_class_percentage = min_class_percentage
         self.tracked_objects = {}  # track_id -> TrackedObject
         self.current_frame = 0
         self.hd_frames = {}  # frame_id -> frame
@@ -77,25 +96,24 @@ class ObjectTracker:
         if hd_frame is not None:
             self.hd_frames[self.current_frame] = hd_frame
 
-        # Process detections
+        # Process detections - track ALL objects regardless of class
         if result.boxes and result.boxes.is_track:
             boxes = result.boxes.xywh.cpu()
             track_ids = result.boxes.id.int().cpu().tolist()
             clss = result.boxes.cls.int().cpu().tolist()
 
-            # Filter and process objects of the specified class
+            # Track all detected objects
             for box, track_id, cls in zip(boxes, track_ids, clss):
-                if cls == self.class_id:
-                    seen_this_frame.add(track_id)
+                seen_this_frame.add(track_id)
 
-                    if track_id in self.tracked_objects:
-                        # Update existing tracked object
-                        self.tracked_objects[track_id].update(box, self.current_frame)
-                    else:
-                        # Create new tracked object
-                        obj = TrackedObject(track_id, cls, box)
-                        obj.frame_ids.append(self.current_frame)
-                        self.tracked_objects[track_id] = obj
+                if track_id in self.tracked_objects:
+                    # Update existing tracked object with new class_id
+                    self.tracked_objects[track_id].update(box, cls, self.current_frame)
+                else:
+                    # Create new tracked object
+                    obj = TrackedObject(track_id, cls, box)
+                    obj.frame_ids.append(self.current_frame)
+                    self.tracked_objects[track_id] = obj
 
         # Mark unseen objects and purge old ones
         to_purge = []
@@ -105,11 +123,19 @@ class ObjectTracker:
                 if obj.frames_since_seen >= self.frames_before_purge:
                     to_purge.append(track_id)
 
-        # Purge and call callbacks
+        # Purge and call callbacks (only for objects matching target class)
         for track_id in to_purge:
             obj = self.tracked_objects.pop(track_id)
             if self.on_object_lost:
-                self.on_object_lost(obj)
+                # Check if object was any of the target classes in enough frames
+                total_target_percentage = sum(
+                    obj.get_class_percentage(class_id) for class_id in self.target_class_ids
+                )
+                if total_target_percentage >= self.min_class_percentage:
+                    self.on_object_lost(obj)
+                else:
+                    majority_class = obj.get_majority_class()
+                    print(f"  Filtered out object #{track_id}: {total_target_percentage:.1f}% target classes {self.target_class_ids} (majority: {majority_class})")
 
         # Cleanup unused HD frames
         self._cleanup_hd_frames()
