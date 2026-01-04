@@ -25,18 +25,21 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements file
 COPY requirements.txt .
 
+ENV PYTHONDONTWRITEBYTECODE=1
+
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY *.py .
-
-# Create necessary directories
-RUN mkdir -p captured_cars test_footage data frames
 
 # Download YOLO model during build
 RUN wget -q https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt -O data/yolo11n.pt \
     && echo "YOLO model downloaded successfully"
+
+
+# Create necessary directories
+RUN mkdir -p captured_cars test_footage data frames
+
+# Copy application code
+COPY *.py .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
