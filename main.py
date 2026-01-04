@@ -227,15 +227,12 @@ def open_stream(url, name):
 
 def reconnect_stream(cap, url, name):
     """Reconnect to a stream that has failed"""
-    print(f"Reconnecting to {name} stream...")
     cap.release()
     time.sleep(1)  # Brief pause before reconnecting
     cap = FFmpegCapture(url)
     time.sleep(2)  # Give FFmpeg time to start
-    if cap.isOpened():
-        print(f"{name} stream reconnected successfully")
-    else:
-        print(f"Failed to reconnect to {name} stream")
+    if not cap.isOpened():
+        print(f"Stream: failed to reconnect {name}", flush=True)
     return cap
 
 # Open HD stream - we'll downsample in memory for YOLO tracking

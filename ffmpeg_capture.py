@@ -29,13 +29,19 @@ class FFmpegCapture:
         # Build ffmpeg command with robust RTSP settings
         cmd = [
             'ffmpeg',
-            '-loglevel', 'warning',  # Show warnings and errors
+            '-loglevel', 'error',  # Only show errors, not warnings
             '-rtsp_transport', 'tcp',
+            '-rtsp_flags', 'prefer_tcp',
+            '-stimeout', '5000000',  # Socket timeout 5s (in microseconds)
+            '-timeout', '5000000',   # Connection timeout 5s
+            '-reconnect', '1',       # Enable reconnection
+            '-reconnect_streamed', '1',
+            '-reconnect_delay_max', '2',
             '-i', self.url,
             '-f', 'rawvideo',
             '-pix_fmt', 'bgr24',
             '-an',  # Disable audio
-            '-fflags', 'nobuffer',  # Minimize buffering
+            '-fflags', 'nobuffer+discardcorrupt',  # Minimize buffering, discard corrupt frames
             '-flags', 'low_delay',  # Low delay mode
         ]
 
@@ -88,34 +94,45 @@ class FFmpegCapture:
         self.thread.start()
 
     def _log_stderr(self):
-        """Log FFmpeg stderr output for debugging"""
+        """Log FFmpeg stderr output for debugging (filtered)"""
         if not self.process or not self.process.stderr:
             return
+
+        # Patterns to suppress (common during reconnection, handled by our retry logic)
+        suppress_patterns = [
+            'tls @', 'IO error', 'End of file', 'session has been invalidated',
+            'Error during demuxing', 'error while decoding', 'corrupt decoded frame',
+            'frame='
+        ]
 
         try:
             for line in iter(self.process.stderr.readline, b''):
                 if not self.running:
                     break
                 line_str = line.decode('utf-8', errors='ignore').strip()
-                if line_str and not line_str.startswith('frame='):  # Filter out frame progress
-                    print(f"FFmpeg: {line_str}", flush=True)  # Force immediate output
-        except Exception as e:
-            print(f"Error reading FFmpeg stderr: {e}", flush=True)
+                if line_str and not any(p in line_str for p in suppress_patterns):
+                    print(f"FFmpeg: {line_str}", flush=True)
+        except Exception:
+            pass  # Ignore stderr reading errors during shutdown
 
     def _restart_stream(self):
         """Restart the ffmpeg process (called from background thread)"""
-        print("Restarting FFmpeg stream...")
-
         # Build ffmpeg command with robust RTSP settings
         cmd = [
             'ffmpeg',
-            '-loglevel', 'warning',  # Show warnings and errors
+            '-loglevel', 'error',  # Only show errors, not warnings
             '-rtsp_transport', 'tcp',
+            '-rtsp_flags', 'prefer_tcp',
+            '-stimeout', '5000000',  # Socket timeout 5s (in microseconds)
+            '-timeout', '5000000',   # Connection timeout 5s
+            '-reconnect', '1',       # Enable reconnection
+            '-reconnect_streamed', '1',
+            '-reconnect_delay_max', '2',
             '-i', self.url,
             '-f', 'rawvideo',
             '-pix_fmt', 'bgr24',
             '-an',
-            '-fflags', 'nobuffer',  # Minimize buffering
+            '-fflags', 'nobuffer+discardcorrupt',  # Minimize buffering, discard corrupt frames
             '-flags', 'low_delay',  # Low delay mode
         ]
 
@@ -139,8 +156,6 @@ class FFmpegCapture:
         # Give FFmpeg time to establish connection
         time.sleep(1)
 
-        print("FFmpeg stream restarted")
-
     def _read_frames(self):
         """Background thread to read frames from ffmpeg"""
         retry_count = 0
@@ -151,15 +166,13 @@ class FFmpegCapture:
             try:
                 raw_frame = self.process.stdout.read(self.frame_size)
                 if len(raw_frame) != self.frame_size:
-                    # Mark disconnection start time
+                    # Mark disconnection start time (only once per disconnect event)
                     if disconnect_start_time is None:
                         disconnect_start_time = time.time()
 
-                    print(f"FFmpeg stream ended or error occurred")
-
                     # Check if we should retry
                     if self.max_retries is not None and retry_count >= self.max_retries:
-                        print(f"Max retries ({self.max_retries}) reached, stopping stream")
+                        print(f"Stream: max retries ({self.max_retries}) reached, stopping", flush=True)
                         break
 
                     # Clean up old process
@@ -172,7 +185,6 @@ class FFmpegCapture:
 
                     # Wait before retrying with exponential backoff
                     retry_count += 1
-                    print(f"Retrying in {current_retry_delay}s (attempt {retry_count})...")
                     time.sleep(current_retry_delay)
                     current_retry_delay = min(current_retry_delay * 1.5, 30.0)  # Cap at 30s
 
@@ -186,7 +198,7 @@ class FFmpegCapture:
                 # Successfully read frame - reset retry counter and report reconnection
                 if retry_count > 0 and disconnect_start_time is not None:
                     downtime = time.time() - disconnect_start_time
-                    print(f"Stream reconnected after {downtime:.1f}s downtime", flush=True)
+                    print(f"Stream: reconnected after {downtime:.1f}s", flush=True)
                     disconnect_start_time = None
 
                 retry_count = 0
@@ -209,12 +221,11 @@ class FFmpegCapture:
                 # Mark disconnection start time
                 if disconnect_start_time is None:
                     disconnect_start_time = time.time()
-
-                print(f"Error reading frame: {e}")
+                    print(f"Stream error: {e}", flush=True)
 
                 # Clean up and retry
                 if self.max_retries is not None and retry_count >= self.max_retries:
-                    print(f"Max retries ({self.max_retries}) reached, stopping stream")
+                    print(f"Stream: max retries ({self.max_retries}) reached, stopping", flush=True)
                     break
 
                 if self.process:
@@ -225,7 +236,6 @@ class FFmpegCapture:
                         self.process.kill()
 
                 retry_count += 1
-                print(f"Retrying in {current_retry_delay}s (attempt {retry_count})...")
                 time.sleep(current_retry_delay)
                 current_retry_delay = min(current_retry_delay * 1.5, 30.0)
 
