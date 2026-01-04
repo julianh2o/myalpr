@@ -30,13 +30,12 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create necessary directories
+RUN mkdir -p data frames
+
 # Download YOLO model during build
 RUN wget -q https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt -O data/yolo11n.pt \
     && echo "YOLO model downloaded successfully"
-
-
-# Create necessary directories
-RUN mkdir -p captured_cars test_footage data frames
 
 # Copy application code
 COPY *.py .
