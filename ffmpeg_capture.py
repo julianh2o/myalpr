@@ -31,17 +31,11 @@ class FFmpegCapture:
             'ffmpeg',
             '-loglevel', 'error',  # Only show errors, not warnings
             '-rtsp_transport', 'tcp',
-            '-rtsp_flags', 'prefer_tcp',
-            '-stimeout', '5000000',  # Socket timeout 5s (in microseconds)
-            '-timeout', '5000000',   # Connection timeout 5s
-            '-reconnect', '1',       # Enable reconnection
-            '-reconnect_streamed', '1',
-            '-reconnect_delay_max', '2',
             '-i', self.url,
             '-f', 'rawvideo',
             '-pix_fmt', 'bgr24',
             '-an',  # Disable audio
-            '-fflags', 'nobuffer+discardcorrupt',  # Minimize buffering, discard corrupt frames
+            '-fflags', 'nobuffer',  # Minimize buffering
             '-flags', 'low_delay',  # Low delay mode
         ]
 
@@ -122,17 +116,11 @@ class FFmpegCapture:
             'ffmpeg',
             '-loglevel', 'error',  # Only show errors, not warnings
             '-rtsp_transport', 'tcp',
-            '-rtsp_flags', 'prefer_tcp',
-            '-stimeout', '5000000',  # Socket timeout 5s (in microseconds)
-            '-timeout', '5000000',   # Connection timeout 5s
-            '-reconnect', '1',       # Enable reconnection
-            '-reconnect_streamed', '1',
-            '-reconnect_delay_max', '2',
             '-i', self.url,
             '-f', 'rawvideo',
             '-pix_fmt', 'bgr24',
             '-an',
-            '-fflags', 'nobuffer+discardcorrupt',  # Minimize buffering, discard corrupt frames
+            '-fflags', 'nobuffer',  # Minimize buffering
             '-flags', 'low_delay',  # Low delay mode
         ]
 

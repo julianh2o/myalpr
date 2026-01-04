@@ -241,8 +241,12 @@ cap = open_stream(stream_url, "HD camera")
 print("Stream opened successfully!")
 
 fps = FpsMonitor()
+frame_number = 0
+video_writer = None
+
 if HEADLESS:
     print("Starting stream in headless mode... Press Ctrl+C to quit")
+    print("Recording will be saved to ./frames/debug_recording.avi")
 else:
     print("Starting stream... Press 'q' to quit")
 
@@ -251,91 +255,107 @@ max_errors_before_reconnect = 10  # Try reconnecting after this many errors
 max_reconnect_attempts = 3  # Maximum reconnection attempts before giving up
 reconnect_count = 0
 
-while True:
-    # Grab and retrieve frame from HD stream
-    try:
-        if not cap.grab():
-            consecutive_errors += 1
-            if consecutive_errors >= max_errors_before_reconnect:
-                if reconnect_count < max_reconnect_attempts:
-                    cap = reconnect_stream(cap, stream_url, "HD camera")
-                    consecutive_errors = 0
-                    reconnect_count += 1
-                    time.sleep(2)
-                    continue
-                else:
-                    print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
-                    break
-            time.sleep(0.1)
-            continue
-
-        success, frame_hd = cap.retrieve()
-        if not success or frame_hd is None:
-            consecutive_errors += 1
-            if consecutive_errors >= max_errors_before_reconnect:
-                if reconnect_count < max_reconnect_attempts:
-                    cap = reconnect_stream(cap, stream_url, "HD camera")
-                    consecutive_errors = 0
-                    reconnect_count += 1
-                    time.sleep(2)
-                    continue
-                else:
-                    print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
-                    break
-            time.sleep(0.1)
-            continue
-
-    except Exception as e:
-        print(f"Error grabbing frame: {e}")
-        consecutive_errors += 1
-        if consecutive_errors >= max_errors_before_reconnect:
-            if reconnect_count < max_reconnect_attempts:
-                cap = reconnect_stream(cap, stream_url, "HD camera")
-                consecutive_errors = 0
-                reconnect_count += 1
-                time.sleep(2)
+try:
+    while True:
+        # Grab and retrieve frame from HD stream
+        try:
+            if not cap.grab():
+                consecutive_errors += 1
+                if consecutive_errors >= max_errors_before_reconnect:
+                    if reconnect_count < max_reconnect_attempts:
+                        cap = reconnect_stream(cap, stream_url, "HD camera")
+                        consecutive_errors = 0
+                        reconnect_count += 1
+                        time.sleep(2)
+                        continue
+                    else:
+                        print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
+                        break
+                time.sleep(0.1)
                 continue
-            else:
-                print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
-                break
-        time.sleep(0.1)
-        continue
 
-    # Reset error counters on success
-    consecutive_errors = 0
-    reconnect_count = 0
+            success, frame_hd = cap.retrieve()
+            if not success or frame_hd is None:
+                consecutive_errors += 1
+                if consecutive_errors >= max_errors_before_reconnect:
+                    if reconnect_count < max_reconnect_attempts:
+                        cap = reconnect_stream(cap, stream_url, "HD camera")
+                        consecutive_errors = 0
+                        reconnect_count += 1
+                        time.sleep(2)
+                        continue
+                    else:
+                        print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
+                        break
+                time.sleep(0.1)
+                continue
 
-    # Add frame to rolling buffer for video context
-    global_frame_id = frame_buffer.add_frame(frame_hd)
+        except Exception as e:
+            print(f"Error grabbing frame: {e}")
+            consecutive_errors += 1
+            if consecutive_errors >= max_errors_before_reconnect:
+                if reconnect_count < max_reconnect_attempts:
+                    cap = reconnect_stream(cap, stream_url, "HD camera")
+                    consecutive_errors = 0
+                    reconnect_count += 1
+                    time.sleep(2)
+                    continue
+                else:
+                    print(f"Max reconnection attempts ({max_reconnect_attempts}) exceeded, exiting")
+                    break
+            time.sleep(0.1)
+            continue
 
-    # Set frame dimensions on first frame (based on target low-res size)
-    if frame_width is None:
-        frame_width = TARGET_WIDTH
-        frame_height = TARGET_HEIGHT
-        hd_height, hd_width = frame_hd.shape[:2]
-        print(f"HD frame dimensions: {hd_width}x{hd_height}")
-        print(f"Tracking frame dimensions: {frame_width}x{frame_height}")
+        # Reset error counters on success
+        consecutive_errors = 0
+        reconnect_count = 0
+        frame_number += 1
 
-    # Downsample HD frame to low-res for YOLO tracking
-    frame_low = cv2.resize(frame_hd, (TARGET_WIDTH, TARGET_HEIGHT))
+        # Add frame to rolling buffer for video context
+        global_frame_id = frame_buffer.add_frame(frame_hd)
 
-    # Apply triangular mask to top right corner (to ignore timestamp/overlay)
-    # Triangle extends 10% left from right edge and 40% down from top
-    mask_points = np.array([
-        [frame_width, 0],                           # Top right corner
-        [int(frame_width * 0.1), 0],                # 10% left along top edge
-        [frame_width, int(frame_height * 0.40)]     # 40% down along right edge
-    ], dtype=np.int32)
-    cv2.fillPoly(frame_low, [mask_points], (0, 0, 0))
+        # Set frame dimensions on first frame (based on target low-res size)
+        if frame_width is None:
+            frame_width = TARGET_WIDTH
+            frame_height = TARGET_HEIGHT
+            hd_height, hd_width = frame_hd.shape[:2]
+            print(f"HD frame dimensions: {hd_width}x{hd_height}")
+            print(f"Tracking frame dimensions: {frame_width}x{frame_height}")
 
-    # Run YOLO tracking on downsampled frame
-    results = model.track(frame_low, persist=True, verbose=False)
-    tracked_objects = tracker.update(results[0], hd_frame=frame_hd)
+            # Initialize video writer in headless mode
+            if HEADLESS:
+                output_path = './frames/debug_recording.avi'  # Use AVI for better compatibility
+                fourcc = cv2.VideoWriter_fourcc(*'XVID')  # XVID codec is widely supported
+                video_writer = cv2.VideoWriter(output_path, fourcc, 10.0,
+                                              (frame_width, frame_height))
+                if video_writer.isOpened():
+                    print(f"Video recording initialized: {output_path} ({frame_width}x{frame_height})")
+                else:
+                    print(f"Warning: Failed to initialize video writer")
+                    print(f"  Path: {output_path}, Codec: XVID, Size: {frame_width}x{frame_height}")
+                    # Try without video recording
+                    video_writer = None
 
-    # Update FPS counter
-    fps.tick()
+        # Downsample HD frame to low-res for YOLO tracking
+        frame_low = cv2.resize(frame_hd, (TARGET_WIDTH, TARGET_HEIGHT))
 
-    if not HEADLESS:
+        # Apply triangular mask to top right corner (to ignore timestamp/overlay)
+        # Triangle extends 10% left from right edge and 40% down from top
+        mask_points = np.array([
+            [frame_width, 0],                           # Top right corner
+            [int(frame_width * 0.1), 0],                # 10% left along top edge
+            [frame_width, int(frame_height * 0.40)]     # 40% down along right edge
+        ], dtype=np.int32)
+        cv2.fillPoly(frame_low, [mask_points], (0, 0, 0))
+
+        # Run YOLO tracking on downsampled frame
+        results = model.track(frame_low, persist=True, verbose=False)
+        tracked_objects = tracker.update(results[0], hd_frame=frame_hd)
+
+        # Update FPS counter
+        fps.tick()
+
+        # Create annotated frame (for both headless and non-headless modes)
         annotated_frame = results[0].plot()
 
         # Draw 75% vertical line
@@ -343,27 +363,41 @@ while True:
         cv2.line(annotated_frame, (vertical_line_x, 0), (vertical_line_x, frame_height),
                  (0, 255, 255), 2)
 
+        # Frame number display (top left, above FPS)
+        cv2.putText(annotated_frame, f"Frame: {frame_number}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
         # FPS Display
-        cv2.putText(annotated_frame, f"FPS: {fps.get_fps():.2f}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(annotated_frame, f"FPS: {fps.get_fps():.2f}", (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         # Display tracking count
-        cv2.putText(annotated_frame, f"Tracking: {len(tracked_objects)} cars", (10, 70),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(annotated_frame, f"Tracking: {len(tracked_objects)} cars", (10, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-        # Display the frame
-        cv2.imshow("Driveway Camera Stream", annotated_frame)
+        if not HEADLESS:
+            # Display the frame
+            cv2.imshow("Driveway Camera Stream", annotated_frame)
 
-        # Break loop if 'q' is pressed
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-    else:
-        # Small delay to prevent CPU spinning in headless mode
-        time.sleep(0.01)
+            # Break loop if 'q' is pressed
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+        else:
+            # Write frame to video file in headless mode
+            if video_writer and video_writer.isOpened():
+                video_writer.write(annotated_frame)
+            # Small delay to prevent CPU spinning
+            time.sleep(0.01)
 
-# Release resources
-cap.release()
-if not HEADLESS:
-    cv2.destroyAllWindows()
-mqtt.disconnect()
-print("Stream ended")
+except KeyboardInterrupt:
+    print("\nInterrupted by user (Ctrl+C)")
+finally:
+    # Release resources
+    cap.release()
+    if video_writer and video_writer.isOpened():
+        video_writer.release()
+        print(f"Recording saved: {frame_number} frames written to ./frames/debug_recording.avi")
+    if not HEADLESS:
+        cv2.destroyAllWindows()
+    mqtt.disconnect()
+    print("Stream ended")
