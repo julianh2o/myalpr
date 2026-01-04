@@ -59,18 +59,23 @@ class ObjectTracker:
         """
         self.on_object_lost = callback
 
-    def update(self, result):
+    def update(self, result, hd_frame=None):
         """
         Update tracker with new YOLO tracking result.
 
         Args:
             result: YOLO tracking result object
+            hd_frame: Optional high-resolution frame to store with this frame ID
 
         Returns:
             list: List of TrackedObject instances currently being tracked
         """
         self.current_frame += 1
         seen_this_frame = set()
+
+        # Store HD frame if provided
+        if hd_frame is not None:
+            self.hd_frames[self.current_frame] = hd_frame
 
         # Process detections
         if result.boxes and result.boxes.is_track:

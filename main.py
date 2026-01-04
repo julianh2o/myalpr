@@ -38,8 +38,8 @@ def on_car_lost(obj):
     duration = obj.duration()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    if duration < 2.0:
-        print(f"[{now}] Object #{obj.track_id} ignored (duration {duration:.2f}s < 2s)")
+    if duration < 1.0:
+        print(f"[{now}] Object #{obj.track_id} ignored (duration {duration:.2f}s < 1s)")
         return
 
     frame_count = len(obj.boxes)
@@ -47,6 +47,20 @@ def on_car_lost(obj):
     # Get HD frames for this object
     hd_frames = tracker.get_frames_for_object(obj)
     hd_frame_count = len(hd_frames)
+
+    # Debug: Create video from all HD frames
+    if hd_frame_count > 0:
+        video_path = f"./frames/video_{obj.track_id}.mp4"
+        first_frame = hd_frames[0]
+        h, w = first_frame.shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video_writer = cv2.VideoWriter(video_path, fourcc, 10.0, (w, h))
+
+        for frame in hd_frames:
+            video_writer.write(frame)
+
+        video_writer.release()
+        print(f"  Debug - Saved video with {hd_frame_count} frames to {video_path}")
 
     analysis = analyze_tracked_object(obj, frame_width, frame_height)
 
@@ -106,9 +120,21 @@ def on_car_lost(obj):
 
                 # Debug: Save full HD frame with bounding box drawn
                 debug_frame = hd_frame.copy()
-                cv2.rectangle(debug_frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                cv2.putText(debug_frame, f"Track {obj.track_id}", (x1, y1-10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+                # Draw 75% vertical line (scaled to HD)
+                vertical_line_x = int(hd_width * 0.75)
+                cv2.line(debug_frame, (vertical_line_x, 0), (vertical_line_x, hd_height),
+                        (0, 255, 255), 4)
+
+                # Draw bounding box
+                cv2.rectangle(debug_frame, (x1, y1), (x2, y2), (0, 255, 0), 5)
+
+                # Add labels
+                cv2.putText(debug_frame, f"Track {obj.track_id} - Frame {crossing_frame_id}", (x1, y1-15),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
+                cv2.putText(debug_frame, f"Crop: {x2-x1}x{y2-y1}px", (x1, y2+40),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
+
                 cv2.imwrite(f"./frames/debug_full_{obj.track_id}.jpg", debug_frame)
 
                 cropped_car = hd_frame[y1:y2, x1:x2]
@@ -278,11 +304,7 @@ while True:
 
     # Run YOLO tracking on downsampled frame
     results = model.track(frame_low, persist=True, verbose=False)
-    tracked_objects = tracker.update(results[0])
-
-    # If there are tracked objects, store the HD frame
-    if len(tracked_objects) > 0:
-        tracker.assignFrame(frame_hd)
+    tracked_objects = tracker.update(results[0], hd_frame=frame_hd)
 
     # Update FPS counter
     fps.tick()
