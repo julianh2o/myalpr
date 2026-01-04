@@ -235,6 +235,20 @@ def reconnect_stream(cap, url, name):
         print(f"Stream: failed to reconnect {name}", flush=True)
     return cap
 
+def create_video_writer(width, height):
+    """Create a new video writer with timestamped filename"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = f'./frames/recording_{timestamp}.avi'
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    writer = cv2.VideoWriter(output_path, fourcc, 10.0, (width, height))
+
+    if writer.isOpened():
+        print(f"Started recording: {output_path} ({width}x{height})", flush=True)
+        return writer, time.time()
+    else:
+        print(f"Warning: Failed to initialize video writer for {output_path}", flush=True)
+        return None, None
+
 # Open HD stream - we'll downsample in memory for YOLO tracking
 cap = open_stream(stream_url, "HD camera")
 
@@ -243,10 +257,12 @@ print("Stream opened successfully!")
 fps = FpsMonitor()
 frame_number = 0
 video_writer = None
+recording_start_time = None
+RECORDING_CHUNK_DURATION = 5 * 60  # 5 minutes in seconds
 
 if HEADLESS:
     print("Starting stream in headless mode... Press Ctrl+C to quit")
-    print("Recording will be saved to ./frames/debug_recording.avi")
+    print("Recording will be saved in 5-minute chunks to ./frames/")
 else:
     print("Starting stream... Press 'q' to quit")
 
@@ -322,19 +338,19 @@ try:
             print(f"HD frame dimensions: {hd_width}x{hd_height}")
             print(f"Tracking frame dimensions: {frame_width}x{frame_height}")
 
-            # Initialize video writer in headless mode
+            # Initialize first video writer in headless mode
             if HEADLESS:
-                output_path = './frames/debug_recording.avi'  # Use AVI for better compatibility
-                fourcc = cv2.VideoWriter_fourcc(*'XVID')  # XVID codec is widely supported
-                video_writer = cv2.VideoWriter(output_path, fourcc, 10.0,
-                                              (frame_width, frame_height))
-                if video_writer.isOpened():
-                    print(f"Video recording initialized: {output_path} ({frame_width}x{frame_height})")
-                else:
-                    print(f"Warning: Failed to initialize video writer")
-                    print(f"  Path: {output_path}, Codec: XVID, Size: {frame_width}x{frame_height}")
-                    # Try without video recording
-                    video_writer = None
+                video_writer, recording_start_time = create_video_writer(frame_width, frame_height)
+
+        # Check if we need to start a new recording chunk (every 5 minutes)
+        if HEADLESS and recording_start_time is not None:
+            elapsed = time.time() - recording_start_time
+            if elapsed >= RECORDING_CHUNK_DURATION:
+                # Close current recording and start a new one
+                if video_writer and video_writer.isOpened():
+                    video_writer.release()
+                    print(f"Completed recording chunk ({elapsed/60:.1f} minutes)", flush=True)
+                video_writer, recording_start_time = create_video_writer(frame_width, frame_height)
 
         # Downsample HD frame to low-res for YOLO tracking
         frame_low = cv2.resize(frame_hd, (TARGET_WIDTH, TARGET_HEIGHT))
@@ -396,7 +412,9 @@ finally:
     cap.release()
     if video_writer and video_writer.isOpened():
         video_writer.release()
-        print(f"Recording saved: {frame_number} frames written to ./frames/debug_recording.avi")
+        if recording_start_time is not None:
+            elapsed = time.time() - recording_start_time
+            print(f"Final recording chunk saved ({elapsed/60:.1f} minutes, {frame_number} total frames)")
     if not HEADLESS:
         cv2.destroyAllWindows()
     mqtt.disconnect()
