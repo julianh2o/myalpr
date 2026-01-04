@@ -29,10 +29,8 @@ class FFmpegCapture:
         # Build ffmpeg command with robust RTSP settings
         cmd = [
             'ffmpeg',
+            '-loglevel', 'warning',  # Show warnings and errors
             '-rtsp_transport', 'tcp',
-            '-rtsp_flags', 'prefer_tcp',
-            '-timeout', '5000000',  # 5 second timeout in microseconds
-            '-stimeout', '5000000',  # Socket timeout
             '-i', self.url,
             '-f', 'rawvideo',
             '-pix_fmt', 'bgr24',
@@ -100,9 +98,9 @@ class FFmpegCapture:
                     break
                 line_str = line.decode('utf-8', errors='ignore').strip()
                 if line_str and not line_str.startswith('frame='):  # Filter out frame progress
-                    print(f"FFmpeg: {line_str}")
-        except:
-            pass
+                    print(f"FFmpeg: {line_str}", flush=True)  # Force immediate output
+        except Exception as e:
+            print(f"Error reading FFmpeg stderr: {e}", flush=True)
 
     def _restart_stream(self):
         """Restart the ffmpeg process (called from background thread)"""
@@ -111,10 +109,8 @@ class FFmpegCapture:
         # Build ffmpeg command with robust RTSP settings
         cmd = [
             'ffmpeg',
+            '-loglevel', 'warning',  # Show warnings and errors
             '-rtsp_transport', 'tcp',
-            '-rtsp_flags', 'prefer_tcp',
-            '-timeout', '5000000',  # 5 second timeout in microseconds
-            '-stimeout', '5000000',  # Socket timeout
             '-i', self.url,
             '-f', 'rawvideo',
             '-pix_fmt', 'bgr24',

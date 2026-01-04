@@ -122,12 +122,21 @@ def open_stream(url, name):
     """Open a video stream with error handling using FFmpeg subprocess"""
     print(f"Opening {name} stream with FFmpeg...")
     cap = FFmpegCapture(url)
-    time.sleep(2)  # Give FFmpeg time to start
-    if not cap.isOpened():
-        print(f"Error: Could not open {name} stream")
-        exit(1)
-    print(f"{name} stream opened successfully")
-    return cap
+
+    # Wait for first frame (with timeout)
+    max_wait = 30  # Wait up to 30 seconds for first frame
+    wait_interval = 0.5
+    waited = 0
+
+    while waited < max_wait:
+        if cap.grab():
+            print(f"{name} stream opened successfully")
+            return cap
+        time.sleep(wait_interval)
+        waited += wait_interval
+
+    print(f"Error: Could not open {name} stream - timeout waiting for first frame")
+    exit(1)
 
 def reconnect_stream(cap, url, name):
     """Reconnect to a stream that has failed"""
