@@ -14,6 +14,7 @@ services:
       # Camera Streams (RTSP/RTSPS URLs)
       - CAM_DRIVEWAY_HIGH=${CAM_DRIVEWAY_HIGH}
       - CAM_DRIVEWAY_LOW=${CAM_DRIVEWAY_LOW}
+      - KNOWN_PLATES=ABC123,123ABC
 
       # Ollama Vision Model
       - OLLAMA_URL=${OLLAMA_URL}
