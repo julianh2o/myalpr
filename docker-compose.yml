@@ -10,6 +10,9 @@ services:
 
     network_mode: host
 
+    volumes:
+      - ./frames:/app/frames
+
     environment:
       - CAM_DRIVEWAY_HIGH=${CAM_DRIVEWAY_HIGH}
       - KNOWN_PLATES=ABC123,123ABC
