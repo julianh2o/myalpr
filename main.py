@@ -24,6 +24,12 @@ mqtt = get_mqtt_publisher()  # MQTT version
 frame_width = None
 frame_height = None
 
+# Load known plates for recognition guidance
+KNOWN_PLATES_STR = os.getenv("KNOWN_PLATES", "")
+KNOWN_PLATES = [p.strip().upper() for p in KNOWN_PLATES_STR.split(",") if p.strip()] if KNOWN_PLATES_STR else None
+if KNOWN_PLATES:
+    print(f"Known plates loaded: {', '.join(KNOWN_PLATES)}")
+
 print(cv2.getBuildInformation())
 
 def on_car_lost(obj):
@@ -68,10 +74,20 @@ def on_car_lost(obj):
                 scale_x, scale_y = hd_width / frame_width, hd_height / frame_height
 
                 # Extract bounding box coordinates (xywh format) from low quality tracking
-                x, y, w, h = float(box[0]*scale_x), float(box[1]*scale_y), float(box[2]*scale_x), float(box[3]*scale_y)
+                # box is in pixel coordinates of the low-res frame
+                x_center, y_center, w, h = float(box[0]), float(box[1]), float(box[2]), float(box[3])
 
-                # Convert to pixel coordinates
-                x1, y1, x2, y2 = int(x - w / 2), int(y - h / 2), int(x + w / 2), int(y + h / 2)
+                # Scale to HD frame coordinates
+                x_center_hd = x_center * scale_x
+                y_center_hd = y_center * scale_y
+                w_hd = w * scale_x
+                h_hd = h * scale_y
+
+                # Convert from center+size to corner coordinates
+                x1 = int(x_center_hd - w_hd / 2)
+                y1 = int(y_center_hd - h_hd / 2)
+                x2 = int(x_center_hd + w_hd / 2)
+                y2 = int(y_center_hd + h_hd / 2)
 
                 # Ensure coordinates are within HD frame bounds
                 x1 = max(0, x1)
@@ -79,12 +95,26 @@ def on_car_lost(obj):
                 x2 = min(hd_width, x2)
                 y2 = min(hd_height, y2)
 
+                # Debug: Print coordinates
+                print(f"  Debug - Low-res box (xywh): center=({x_center:.1f},{y_center:.1f}) size=({w:.1f},{h:.1f})")
+                print(f"  Debug - HD frame size: {hd_width}x{hd_height}, Low-res: {frame_width}x{frame_height}")
+                print(f"  Debug - Scale factors: x={scale_x:.2f}, y={scale_y:.2f}")
+                print(f"  Debug - HD box corners: ({x1},{y1}) to ({x2},{y2})")
+                print(f"  Debug - Crop size: {x2-x1}x{y2-y1}")
+
+                # Debug: Save full HD frame with bounding box drawn
+                debug_frame = hd_frame.copy()
+                cv2.rectangle(debug_frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                cv2.putText(debug_frame, f"Track {obj.track_id}", (x1, y1-10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                cv2.imwrite(f"./frames/debug_full_{obj.track_id}.jpg", debug_frame)
+
                 cropped_car = hd_frame[y1:y2, x1:x2]
                 cv2.imwrite(f"./frames/cropped_{obj.track_id}.jpg", cropped_car)
 
                 # Read the license plate
                 print(f"  Reading license plate from HD frame {crossing_frame_id}...")
-                plate_number = read_plate(cropped_car)
+                plate_number = read_plate(cropped_car, known_plates=KNOWN_PLATES)
 
                 if plate_number:
                     print(f"  License Plate: {plate_number}")
