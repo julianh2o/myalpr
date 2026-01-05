@@ -15,7 +15,7 @@ services:
 
     environment:
       - CAM_DRIVEWAY_HIGH=${CAM_DRIVEWAY_HIGH}
-      - KNOWN_PLATES=ABC123,123ABC
+      - KNOWN_PLATES=
 
       # Ollama Vision Model
       - OLLAMA_URL=${OLLAMA_URL}

@@ -5,3 +5,6 @@ __pycache__
 .env
 .DS_Store
 frames/
+
+# BAML auto-generated code
+baml_client/
