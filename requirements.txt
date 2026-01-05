@@ -6,5 +6,6 @@ paho-mqtt>=1.6.1
 requests>=2.31.0
 python-dotenv>=1.0.0
 lap>=0.5.12
-baml-py>=0.215.2
+baml-py==0.215.2
+baml-cli==0.215.2
 pydantic>=2.12.5
